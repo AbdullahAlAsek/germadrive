@@ -2165,7 +2165,8 @@ GD.checkRules = function (W, dt) {
   }
   // lane changes and overtaking manoeuvres
   var lane = GD.laneOf(p);
-  if (sgNow.k === 'e' && lane !== p.lastLane && p.lastLane !== null && p.lastLane !== undefined && Math.abs(p.v) > 0.5) {
+  // play streets and pedestrian zones (type 'play') have no lanes and no centre line: no lane-change or pull-out checks there
+  if (sgNow.k === 'e' && sgNow.e.t !== 'play' && lane !== p.lastLane && p.lastLane !== null && p.lastLane !== undefined && Math.abs(p.v) > 0.5) {
     var right = lane > p.lastLane || (p.lastLane === -1);
     var need = right ? 1 : -1;
     if (lane === -1 || p.lastLane === -1) {
