@@ -6479,7 +6479,7 @@ m({ id: '4.13', z: 4, lvl: 4, map: 'city', t: ['Fahrstreifensignale', 'Lane-cont
 m({ id: '4.14', z: 4, lvl: 4, map: 'city', t: ['Fußgängerzone', 'Pedestrian zone'],
   d: ['Mit dem Lieferwagen in die Fußgängerzone (Lieferverkehr frei). Schrittgeschwindigkeit, Fußgänger haben Vorrang, notfalls warten.', 'Drive the delivery van into the pedestrian zone (deliveries allowed). Walking speed, pedestrians first, wait if needed.'],
   rules: ['W10'],
-  player: { r: ['K3', 'K4', 'PZ'], s0: 30, limit: 50, veh: 'van', sEnd: 140 },
+  player: { r: ['K3', 'K4', 'PZ'], s0: 30, limit: 50, veh: 'van', sEnd: 140, lane: 1 },
   goal: { type: 'end' },
   setup: function (W, h) {
     var e = 'K4-PZ';
