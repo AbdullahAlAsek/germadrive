@@ -347,6 +347,7 @@ h3{margin:20px 0 8px;font-size:16px}
 .rvr{display:flex;align-items:center;gap:10px;margin-top:10px;font-size:12px;color:rgba(255,255,255,.75)}
 .rvol{flex:1;accent-color:#21d158}
 .rnote{display:block;margin-top:8px;font-size:11px;color:rgba(255,255,255,.55)}
+.rnote a{color:#ffce00;text-decoration:underline}
 /* tour */
 .tour{position:fixed;inset:0;z-index:80}
 .spot{position:fixed;border-radius:16px;box-shadow:0 0 0 2px rgba(255,255,255,.9),0 0 0 9999px rgba(4,8,18,.72),0 0 30px 6px rgba(110,200,60,.6);transition:left .45s cubic-bezier(.2,.8,.2,1),top .45s cubic-bezier(.2,.8,.2,1),width .45s cubic-bezier(.2,.8,.2,1),height .45s cubic-bezier(.2,.8,.2,1);pointer-events:none}
@@ -389,14 +390,7 @@ h3{margin:20px 0 8px;font-size:16px}
 .lnav .gbtn.wide{background:rgba(20,28,50,.55)}
 /* radio v2 */
 .rpanel{width:min(320px,calc(100vw - 112px));max-height:calc(100vh - 16px);overflow:auto;background:rgba(12,18,34,.82)}
-.rtabs{display:flex;background:rgba(255,255,255,.1);border-radius:10px;padding:2px;margin-left:6px}
-.rtabs button{border:0;background:none;color:rgba(255,255,255,.75);font-weight:750;font-size:12px;padding:5px 10px;border-radius:8px}
-.rtabs button.on{background:#21d158;color:#06210f}
 .rfq{display:block;font-size:11px;opacity:.75}
-.rchips{display:flex;gap:6px;overflow-x:auto;padding:2px 0 10px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
-.rchips::-webkit-scrollbar{display:none}
-.rch{flex:0 0 auto;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.08);color:#fff;border-radius:999px;padding:6px 11px;font-size:12.5px;font-weight:650;white-space:nowrap}
-.rch.on{background:#21d158;border-color:#21d158;color:#06210f}
 .hasctx .hstat{bottom:calc(228px + var(--safeb))}
 @media (max-height:520px){.hasctx .hstat{bottom:calc(186px + var(--safeb))}}
 
@@ -2170,10 +2164,16 @@ GD.checkRules = function (W, dt) {
     var right = lane > p.lastLane || (p.lastLane === -1);
     var need = right ? 1 : -1;
     if (lane === -1 || p.lastLane === -1) {
-      var obs = GD.nearestAhead(W, p, 40);
-      var r = (obs && obs.v > 0.5) ? 'U6' : (lane === -1 ? 'U10' : 'U6');
-      if (p.ind !== need && !chk.noIndOT) GD.fault(W, r, false, lane === -1 ? { de: 'Beim Ausscheren nicht geblinkt.', en: 'You pulled out without signalling.' } : { de: 'Beim Wiedereinordnen nicht geblinkt.', en: 'You moved back in without signalling.' }, 'lc' + Math.round(p.s / 30));
-      if (lane === -1 && sgNow.e.center === 'solid') {}
+      // crossing the middle of the road is only "pulling out" when you pass something (§ 5 Abs. 4a, § 6 StVO);
+      // drifting over the middle with nothing to pass is not judged here
+      if (lane === -1) {
+        var tg = GD.passTarget(W, p);
+        p.pullOut = tg ? { moving: tg.v > 0.5 } : null;
+        if (tg && p.ind !== need && !chk.noIndOT) GD.fault(W, tg.v > 0.5 ? 'U6' : 'U10', false, { de: 'Beim Ausscheren nicht geblinkt.', en: 'You pulled out without signalling.' }, 'lc' + Math.round(p.s / 30));
+      } else {
+        if (p.pullOut && p.ind !== need && !chk.noIndOT) GD.fault(W, 'U6', false, { de: 'Beim Wiedereinordnen nicht geblinkt.', en: 'You moved back in without signalling.' }, 'lc' + Math.round(p.s / 30));
+        p.pullOut = null;
+      }
     } else {
       if (p.ind !== need) GD.fault(W, 'F5', false, { de: 'Fahrstreifen gewechselt, ohne zu blinken.', en: 'You changed lanes without signalling.' }, 'lc' + Math.round(p.s / 30));
       if (chk.look && !(p.look > p.indOnT - 0.01 && p.look > W.t - 15)) GD.fault(W, 'B3', false, { de: 'Vor dem Fahrstreifenwechsel nicht nach hinten geschaut (Spiegel und Schulterblick).', en: 'You did not check behind (mirror and shoulder check) before changing lanes.' }, 'lk' + Math.round(p.s / 30));
@@ -2198,6 +2198,18 @@ GD.checkRules = function (W, dt) {
   p.prevS = p.s;
 };
 GD.rightLane = function (p) { var sg = GD.segAt(p.P, p.s); if (sg.k !== 'e') { var pr = p.P.segs[p.P.segs.indexOf(sg) - 1]; return pr && pr.F ? pr.F.n - 1 : 0; } return sg.F.n - 1; };
+// a vehicle, cyclist or obstacle on your half of the road just ahead of you or beside you: the reason to pull out
+GD.passTarget = function (W, p) {
+  var bs = W.bodies || [];
+  for (var i = 0; i < bs.length; i++) {
+    var b = bs[i]; if (b === p || b.gone || b.kind === 'ped' || b.kind === 'deer') continue;
+    var dx = b.x - p.x, dy = b.y - p.y; if (dx * dx + dy * dy > 70 * 70) continue;
+    var al = dx * p.hx + dy * p.hy; if (al < -(p.len / 2 + (b.len || 4) / 2) || al > 45) continue;
+    if (b.hx !== undefined && b.hx * p.hx + b.hy * p.hy < -0.3) continue; // oncoming traffic is not passed
+    var pr = GD.project(p.P, b.x, b.y, p.s, true); if (pr.d > -0.3 && pr.d < 9) return b;
+  }
+  return null;
+};
 GD.nearestAhead = function (W, p, look) { var o = W.scanObstacle(p, look); return o ? o.body : null; };
 GD.enterNode = function (W, p, mv) {
   var N = mv.N, chk = W.mis.checks || {};
@@ -7719,7 +7731,7 @@ GD.outroFor = function (m, late) {
 })();
 
 // ---- 65_extras.js
-// Extras: driving quotes, the offline radio (music generated live with Web Audio) and the 3D showroom on the home screen.
+// Extras: driving quotes, Germalingo Radio and the 3D showroom on the home screen.
 (function () {
 'use strict';
 
@@ -7760,212 +7772,71 @@ GD.QUOTES = [
 ];
 GD.quote = function (i) { var q = GD.QUOTES; return q[((i === undefined ? Math.floor(Math.random() * q.length) : i) % q.length + q.length) % q.length]; };
 
-// ---------- radio ----------
-var NOISE = null, IR = null;
-function noiseBuf(c) { if (NOISE && NOISE.ctx === c) return NOISE.b; var b = c.createBuffer(1, c.sampleRate, c.sampleRate), d = b.getChannelData(0); for (var i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1; NOISE = { ctx: c, b: b }; return b; }
-function impulse(c, sec, decay) { if (IR && IR.ctx === c) return IR.b; var n = Math.floor(c.sampleRate * sec), b = c.createBuffer(2, n, c.sampleRate); for (var ch = 0; ch < 2; ch++) { var d = b.getChannelData(ch); for (var i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, decay); } IR = { ctx: c, b: b }; return b; }
-function mtof(m) { return 440 * Math.pow(2, (m - 69) / 12); }
-function rng(seed) { var s = seed >>> 0 || 1; return function () { s ^= s << 13; s >>>= 0; s ^= s >> 17; s ^= s << 5; s >>>= 0; return s / 4294967296; }; }
-var CH = { maj7: [0, 4, 7, 11], m7: [0, 3, 7, 10], d7: [0, 4, 7, 10], maj: [0, 4, 7], min: [0, 3, 7], m9: [0, 3, 7, 10, 14], add9: [0, 4, 7, 14], sus: [0, 5, 7] };
-var STATIONS = [
-  { id: 'lounge', name: 'Germa FM', freq: '96,4', genre: ['Lo-Fi und Chill', 'Lo-fi and chill'], bpm: 76, swing: 0.56,
-    prog: [[[2, 'm7'], [7, 'd7'], [0, 'maj7'], [9, 'm7']], [[0, 'maj7'], [9, 'm7'], [2, 'm7'], [7, 'd7']], [[5, 'maj7'], [4, 'm7'], [9, 'm7'], [2, 'm9']], [[9, 'm9'], [5, 'maj7'], [0, 'add9'], [7, 'sus']]] },
-  { id: 'synth', name: 'Autobahn Nights', freq: '101,2', genre: ['Synthwave', 'Synthwave'], bpm: 102, swing: 0.5, minor: true,
-    prog: [[[0, 'min'], [8, 'maj'], [3, 'maj'], [10, 'maj']], [[0, 'min'], [5, 'min'], [8, 'maj'], [7, 'maj']], [[8, 'maj'], [10, 'maj'], [0, 'min'], [0, 'min']], [[0, 'min'], [3, 'maj'], [10, 'maj'], [5, 'min']]] },
-  { id: 'acoustic', name: 'Landstraße Radio', freq: '89,7', genre: ['Akustik und Pop', 'Acoustic and pop'], bpm: 96, swing: 0.5,
-    prog: [[[0, 'maj'], [7, 'maj'], [9, 'min'], [5, 'maj']], [[0, 'maj'], [5, 'maj'], [9, 'min'], [7, 'maj']], [[9, 'min'], [5, 'maj'], [0, 'maj'], [7, 'maj']], [[5, 'maj'], [0, 'maj'], [7, 'sus'], [7, 'maj']]] },
-  { id: 'jazz', name: 'Stadt Jazz', freq: '104,5', genre: ['Jazz', 'Jazz'], bpm: 132, swing: 0.64,
-    prog: [[[2, 'm7'], [7, 'd7'], [0, 'maj7'], [0, 'maj7']], [[0, 'maj7'], [9, 'd7'], [2, 'm7'], [7, 'd7']], [[4, 'm7'], [9, 'd7'], [2, 'm7'], [7, 'd7']], [[5, 'maj7'], [5, 'm7'], [0, 'maj7'], [7, 'd7']]] }
-];
-var TITLES = ['Abendrot', 'Morgenlicht', 'Stadtlichter', 'Rheinufer', 'Nachtfahrt', 'Grüne Welle', 'Ausfahrt 12', 'Sonntagsruhe', 'Landstraße', 'Tankstelle', 'Elbblick', 'Allee', 'Spätschicht', 'Rastplatz', 'Kopfsteinpflaster', 'Nebelbank', 'Brückenlicht', 'Feierabend', 'Hafenkante', 'Sommerregen', 'Kreisverkehr', 'Weite Felder', 'Tunnelblick', 'Heimweg'];
-var ARTISTS = ['Die Spurwechsler', 'Mila Mittelstreifen', 'Tempo 30 Trio', 'Frieda Fernlicht', 'Anton Allee', 'Paul Parkbucht', 'Die Rastplatz Band', 'Klara Kurve', 'Nora Nebel', 'Jonas Jakob'];
-// public broadcasters only (ARD stations and Deutschlandfunk): their own live streams, played directly; several addresses each, tried in order
-var FM = [
-  { name: '1LIVE', genre: ['WDR · Pop', 'WDR · Pop'], urls: ['https://wdr-1live-live.icecastssl.wdr.de/wdr/1live/live/mp3/128/stream.mp3', 'https://wdr-1live-live.icecast.wdr.de/wdr/1live/live/mp3/128/stream.mp3'] },
-  { name: 'SWR3', genre: ['SWR · Pop', 'SWR · Pop'], urls: ['https://liveradio.swr.de/sw282p3/swr3/play.mp3'] },
-  { name: 'Bayern 3', genre: ['BR · Pop', 'BR · Pop'], urls: ['https://dispatcher.rndfnk.com/br/br3/live/mp3/mid', 'https://dispatcher.rndfnk.com/br/br3/live/mp3/high'] },
-  { name: 'NDR 2', genre: ['NDR · Pop', 'NDR · Pop'], urls: ['https://icecast.ndr.de/ndr/ndr2/hamburg/mp3/128/stream.mp3', 'https://icecast.ndr.de/ndr/ndr2/niedersachsen/mp3/128/stream.mp3'] },
-  { name: 'N-JOY', genre: ['NDR · Charts', 'NDR · Charts'], urls: ['https://icecast.ndr.de/ndr/njoy/live/mp3/128/stream.mp3'] },
-  { name: 'hr3', genre: ['hr · Pop', 'hr · Pop'], urls: ['https://dispatcher.rndfnk.com/hr/hr3/rheinmain/high', 'https://dispatcher.rndfnk.com/hr/hr3/nordhessen/high'] },
-  { name: 'MDR JUMP', genre: ['MDR · Pop', 'MDR · Pop'], urls: ['https://mdr-284320-0.sslcast.mdr.de/mdr/284320/0/mp3/high/stream.mp3'] },
-  { name: 'radioeins', genre: ['rbb · Musik', 'rbb · Music'], urls: ['https://dispatcher.rndfnk.com/rbb/radioeins/live/mp3/mid', 'https://radioeins.de/livemp3'] },
-  { name: 'Fritz', genre: ['rbb · Musik', 'rbb · Music'], urls: ['https://dispatcher.rndfnk.com/rbb/fritz/live/mp3/mid', 'https://fritz.de/livemp3'] },
-  { name: 'WDR 2', genre: ['WDR · Pop', 'WDR · Pop'], urls: ['https://wdr-wdr2-rheinland.icecastssl.wdr.de/wdr/wdr2/rheinland/mp3/128/stream.mp3', 'https://wdr-wdr2-rheinland.icecast.wdr.de/wdr/wdr2/rheinland/mp3/128/stream.mp3'] },
-  { name: 'Deutschlandfunk', genre: ['Nachrichten', 'News'], urls: ['https://st01.sslstream.dlf.de/dlf/01/128/mp3/stream.mp3?aggregator=web'] },
-  { name: 'Deutschlandfunk Nova', genre: ['Jung und Wissen', 'Young and curious'], urls: ['https://st03.sslstream.dlf.de/dlf/03/128/mp3/stream.mp3?aggregator=web'] },
-  { name: 'Deutschlandfunk Kultur', genre: ['Kultur', 'Culture'], urls: ['https://st02.sslstream.dlf.de/dlf/02/128/mp3/stream.mp3?aggregator=web'] }
-];
-var RD = GD.Radio = { on: false, st: 0, vol: 0.55, title: '', artist: '', info: '', listeners: [], mode: 'local', fmState: '' };
-RD.stations = STATIONS; RD.fm = FM;
-RD.list = function () { return RD.mode === 'fm' ? FM : STATIONS; };
+// ---------- radio: only Germalingo Radio, the same songs as radio.germalingo.com, in random order ----------
+var PL_URL = 'https://radio.germalingo.com/playlist.json';
+var STATION = { name: 'Germalingo Radio', site: 'radio.germalingo.com', genre: ['Bansuri, Dotara und Tabla', 'Bansuri, dotara and tabla'] };
+var RD = GD.Radio = { on: false, vol: 0.55, title: '', artist: '', state: '', listeners: [] };
 function emit() { RD.listeners.forEach(function (f) { try { f(RD); } catch (e) {} }); }
 RD.listen = function (f) { RD.listeners.push(f); return function () { var i = RD.listeners.indexOf(f); if (i >= 0) RD.listeners.splice(i, 1); }; };
-var C = null, OUT = null, VERB = null, DLY = null, timer = null, nextT = 0, step = 0, trk = null, crackle = null;
-function ctx() {
-  if (!C) {
-    try { C = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return null; }
-    var comp = C.createDynamicsCompressor(); comp.threshold.value = -16; comp.ratio.value = 3; comp.connect(C.destination);
-    OUT = C.createGain(); OUT.gain.value = 0; OUT.connect(comp);
-    VERB = C.createConvolver(); VERB.buffer = impulse(C, 2.2, 2.6); var vg = C.createGain(); vg.gain.value = 0.32; VERB.connect(vg); vg.connect(OUT);
-    DLY = C.createDelay(1.0); var fb = C.createGain(), dg = C.createGain(); fb.gain.value = 0.32; dg.gain.value = 0.25; DLY.connect(fb); fb.connect(DLY); DLY.connect(dg); dg.connect(OUT);
-  }
-  if (C.state === 'suspended') C.resume();
-  return C;
+RD.station = function () { return STATION; };
+var AU = null, GLR = { pl: null, at: 0, base: '', songs: [], talks: [], bag: [], hist: [], since: 0, ti: 0, errs: 0, req: 0 };
+function glrTitle(x, k) { if (!x) return ''; if (typeof x === 'string') return x; return x[k] || ''; }
+function glrRefill() {
+  var b = GLR.songs.slice();
+  for (var i = b.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)), x = b[i]; b[i] = b[j]; b[j] = x; }
+  var k = Math.min(3, Math.floor(b.length / 2)), rec = GLR.hist.slice(-k);
+  for (var a = b.length - 1; a >= b.length - k; a--) if (rec.indexOf(b[a]) >= 0) for (var c = 0; c < b.length - k; c++) if (rec.indexOf(b[c]) < 0) { var y = b[a]; b[a] = b[c]; b[c] = y; break; }
+  GLR.bag = b;
 }
-function env(g, t, a, peak, d, sus, rel, dur) {
-  g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(peak, t + a);
-  g.gain.setTargetAtTime(peak * sus, t + a, d); g.gain.setTargetAtTime(0.0001, t + Math.max(a, dur), rel);
+function glrLoad(cb) {
+  var my = ++GLR.req;
+  if (GLR.pl && Date.now() - GLR.at < 10 * 60000) { cb(true); return; }
+  fetch(PL_URL, { cache: 'no-cache' }).then(function (r) { if (!r.ok) throw 0; return r.json(); }).then(function (j) {
+    if (my !== GLR.req) return;
+    var it = j.items || [];
+    GLR.pl = j; GLR.at = Date.now(); GLR.base = PL_URL.replace(/[^\/]*$/, '');
+    GLR.songs = it.filter(function (x) { return (x.type || 'song') === 'song' && x.file; });
+    GLR.talks = it.filter(function (x) { return x.type === 'talk' && x.file && !x.first; });
+    GLR.bag = []; cb(GLR.songs.length > 0);
+  }).catch(function () { if (my === GLR.req) cb(false); });
 }
-function voice(t, dur, wet, dly) {
-  var g = C.createGain(); g.connect(OUT); if (wet) { var s = C.createGain(); s.gain.value = wet; g.connect(s); s.connect(VERB); } if (dly) { var s2 = C.createGain(); s2.gain.value = dly; g.connect(s2); s2.connect(DLY); }
-  return g;
+function audio() {
+  if (AU) return AU;
+  AU = new Audio(); AU.preload = 'none';
+  AU.addEventListener('playing', function () { if (RD.on) { RD.state = 'live'; GLR.errs = 0; emit(); } });
+  AU.addEventListener('waiting', function () { if (RD.on) { RD.state = 'buffer'; emit(); } });
+  AU.addEventListener('ended', function () { if (RD.on) glrNext(); });
+  AU.addEventListener('error', function () {
+    if (!RD.on || !AU.getAttribute('src')) return;
+    if (++GLR.errs <= Math.max(3, GLR.songs.length)) setTimeout(glrNext, 1000); else { RD.state = 'error'; emit(); }
+  });
+  return AU;
 }
-function stopAt(nodes, t) { nodes.forEach(function (n) { try { n.start(n._t || 0); n.stop(t); } catch (e) {} }); }
-var INS = {
-  epiano: function (t, m, dur, vel) {
-    var g = voice(t, dur, 0.35), car = C.createOscillator(), mod = C.createOscillator(), mg = C.createGain(), f = mtof(m);
-    car.frequency.value = f; mod.frequency.value = f; mg.gain.setValueAtTime(f * 1.6, t); mg.gain.exponentialRampToValueAtTime(f * 0.15, t + 0.6);
-    mod.connect(mg); mg.connect(car.frequency); car.connect(g); env(g, t, 0.006, 0.09 * vel, 0.5, 0.35, 0.25, dur);
-    car._t = mod._t = t; stopAt([car, mod], t + dur + 1.2);
-  },
-  pad: function (t, m, dur, vel, cut) {
-    var g = voice(t, dur, 0.5, 0.15), lp = C.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.setValueAtTime(cut || 900, t); lp.frequency.linearRampToValueAtTime((cut || 900) * 1.8, t + dur * 0.6); lp.Q.value = 2; lp.connect(g);
-    var os = [-7, 7].map(function (dt) { var o = C.createOscillator(); o.type = 'sawtooth'; o.frequency.value = mtof(m); o.detune.value = dt; o.connect(lp); o._t = t; return o; });
-    env(g, t, 0.35, 0.03 * vel, 1, 0.8, 0.5, dur); stopAt(os, t + dur + 2.5);
-  },
-  pluck: function (t, m, dur, vel) {
-    var g = voice(t, dur, 0.3), lp = C.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.setValueAtTime(5200, t); lp.frequency.exponentialRampToValueAtTime(500, t + 0.35); lp.connect(g);
-    var a = C.createOscillator(), b = C.createOscillator(); a.type = 'sawtooth'; b.type = 'triangle'; a.frequency.value = b.frequency.value = mtof(m); b.detune.value = 4; a.connect(lp); b.connect(lp); a._t = b._t = t;
-    env(g, t, 0.003, 0.07 * vel, 0.18, 0.25, 0.25, Math.min(dur, 0.9)); stopAt([a, b], t + dur + 1);
-  },
-  bass: function (t, m, dur, vel, saw) {
-    var g = voice(t, dur, 0.05), lp = C.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.setValueAtTime(saw ? 1400 : 700, t); lp.frequency.exponentialRampToValueAtTime(saw ? 260 : 300, t + 0.25); lp.connect(g);
-    var o = C.createOscillator(); o.type = saw ? 'sawtooth' : 'triangle'; o.frequency.value = mtof(m); o.connect(lp); var s = C.createOscillator(); s.type = 'sine'; s.frequency.value = mtof(m); s.connect(g); o._t = s._t = t;
-    env(g, t, 0.008, 0.16 * vel, 0.25, 0.55, 0.08, dur * 0.92); stopAt([o, s], t + dur + 0.6);
-  },
-  lead: function (t, m, dur, vel) {
-    var g = voice(t, dur, 0.3, 0.35), lp = C.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2400; lp.connect(g);
-    var o = C.createOscillator(); o.type = 'square'; o.frequency.value = mtof(m); o.connect(lp); o._t = t;
-    env(g, t, 0.01, 0.028 * vel, 0.2, 0.5, 0.08, dur); stopAt([o], t + dur + 0.8);
-  },
-  kick: function (t, vel) {
-    var g = voice(t, 0.4), o = C.createOscillator(); o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.13); o.connect(g); o._t = t;
-    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.42 * vel, t + 0.004); g.gain.exponentialRampToValueAtTime(0.001, t + 0.38); stopAt([o], t + 0.42);
-  },
-  noise: function (t, vel, hp, bp, len, wet) {
-    var g = voice(t, len, wet || 0.1), n = C.createBufferSource(); n.buffer = noiseBuf(C); var f = C.createBiquadFilter(); f.type = bp ? 'bandpass' : 'highpass'; f.frequency.value = bp || hp; if (bp) f.Q.value = 0.9;
-    n.connect(f); f.connect(g); n._t = t; g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vel, t + 0.003); g.gain.exponentialRampToValueAtTime(0.001, t + len); stopAt([n], t + len + 0.05);
-  }
+function glrNext() {
+  if (!RD.on || !GLR.pl) return;
+  var pl = GLR.pl, it, en = GD.S && GD.S.lang === 'en';
+  if (+pl.talkEvery && GLR.talks.length && GLR.since >= +pl.talkEvery) { it = GLR.talks[GLR.ti++ % GLR.talks.length]; GLR.since = 0; }
+  else { if (!GLR.bag.length) glrRefill(); it = GLR.bag.pop(); GLR.hist.push(it); if (GLR.hist.length > 20) GLR.hist.shift(); GLR.since++; }
+  if (!it) { RD.state = 'error'; emit(); return; }
+  var T = it.title || '';
+  if (it.type === 'talk') { RD.title = en ? 'Announcement' : 'Durchsage'; RD.artist = 'Germalingo Radio'; }
+  else if (typeof T === 'string') { RD.title = T; RD.artist = it.artist || ''; }
+  else { RD.title = glrTitle(T, en ? 'en' : 'de') || T.en || T.de || T.bn || ''; RD.artist = T.bn && T.bn !== RD.title ? T.bn : (it.artist || ''); }
+  RD.state = 'buffer'; emit();
+  var a = audio(); a.src = /^https?:/.test(it.file) ? it.file : GLR.base + it.file; a.volume = RD.vol;
+  var pr = a.play(); if (pr && pr.catch) pr.catch(function (e) { if (e && e.name === 'NotAllowedError') { RD.state = 'tap'; emit(); } });
+}
+RD.audio = function () { return AU; };
+RD.play = function () {
+  RD.on = true; RD.state = 'buffer'; RD.title = ''; RD.artist = ''; GLR.errs = 0; emit();
+  audio();
+  glrLoad(function (ok) { if (!RD.on) return; if (!ok) { RD.state = 'error'; emit(); return; } glrNext(); });
 };
-function snare(t, v) { INS.noise(t, 0.16 * v, 1500, 0, 0.18, 0.25); var g = voice(t, 0.1), o = C.createOscillator(); o.frequency.value = 190; o.connect(g); o._t = t; g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.09 * v, t + 0.003); g.gain.exponentialRampToValueAtTime(0.001, t + 0.1); stopAt([o], t + 0.12); }
-function hat(t, v, open) { INS.noise(t, 0.05 * v, 7500, 0, open ? 0.28 : 0.045); }
-function newTrack() {
-  var S = STATIONS[RD.st], r = rng(Date.now() ^ (RD.st * 7919));
-  trk = { r: r, S: S, root: 48 + Math.floor(r() * 9), prog: S.prog[Math.floor(r() * S.prog.length)], bars: 28 + Math.floor(r() * 3) * 4, bar: 0, mel: [], gap: 0, seed: r() };
-  if (S.minor) trk.root = 45 + Math.floor(r() * 7);
-  RD.title = TITLES[Math.floor(r() * TITLES.length)]; RD.artist = ARTISTS[Math.floor(r() * ARTISTS.length)];
-  var q = GD.quote(); RD.info = q; emit();
-}
-function chordAt(bar) { var c = trk.prog[Math.floor(bar / 2) % trk.prog.length]; return { root: trk.root + c[0], iv: CH[c[1]], q: c[1] }; }
-function scale() { return trk.S.minor ? [0, 2, 3, 5, 7, 8, 10] : [0, 2, 4, 5, 7, 9, 11]; }
-function schedule(t, sixteenth, sp) {
-  var S = trk.S, r = trk.r, bar = trk.bar, s = step % 16, ch = chordAt(bar), beat = s % 4 === 0, fade = bar >= trk.bars - 2 ? 0.55 : 1, v = fade;
-  var swing = (s % 2 === 1) ? (S.swing - 0.5) * sixteenth * 2 : 0, tt = t + swing;
-  if (S.id === 'lounge') {
-    if (s === 0 || s === 10 || (s === 7 && r() < 0.4)) INS.kick(tt, 0.8 * v);
-    if (s === 4 || s === 12) { INS.noise(tt, 0.1 * v, 0, 2200, 0.22, 0.4); }
-    if (s % 2 === 0) hat(tt, (s % 4 ? 0.5 : 0.8) * v);
-    if (s === 0) ch.iv.forEach(function (iv, k) { INS.epiano(tt + k * 0.012, ch.root + 12 + iv, sp * 2.8, 0.9 * v); });
-    if (s === 8 && r() < 0.6) ch.iv.slice(1).forEach(function (iv) { INS.epiano(tt, ch.root + 12 + iv, sp * 1.2, 0.6 * v); });
-    if (s === 0 || s === 6 || (s === 11 && r() < 0.5)) INS.bass(tt, ch.root - 12 + (s === 11 ? 7 : 0), sp * 1.3, 0.9 * v);
-    if (s % 4 === 2 && r() < 0.32) { var sc = scale(), n = trk.root + 24 + sc[Math.floor(r() * sc.length)]; INS.epiano(tt, n, sp * 0.9, 0.55 * v); }
-  } else if (S.id === 'synth') {
-    if (beat) INS.kick(tt, 0.95 * v);
-    if (s === 4 || s === 12) snare(tt, 0.9 * v);
-    if (s % 2 === 1) hat(tt, 0.7 * v);
-    if (s === 0 && bar % 2 === 0) ch.iv.forEach(function (iv) { INS.pad(tt, ch.root + 12 + iv, sp * 7.6, v, 700); });
-    INS.bass(tt, ch.root - 12 + (s % 4 === 2 ? 12 : 0), sp * 0.2, 0.75 * v, true);
-    var arp = ch.iv.concat([12]), an = ch.root + 24 + arp[(step >> 0) % arp.length]; if (bar % 8 >= 2) INS.lead(tt, an, sp * 0.22, 0.8 * v);
-  } else if (S.id === 'acoustic') {
-    if (s === 0 || s === 8 || (s === 10 && r() < 0.5)) INS.kick(tt, 0.6 * v);
-    if (s === 4 || s === 12) INS.noise(tt, 0.11 * v, 0, 1800, 0.16, 0.35);
-    INS.noise(tt, (s % 2 ? 0.025 : 0.04) * v, 0, 6500, 0.06);
-    var pat = [0, 2, 1, 2, 3, 2, 1, 2], tones = ch.iv.map(function (iv) { return ch.root + 12 + iv; }).concat([ch.root + 24]);
-    if (s % 2 === 0) INS.pluck(tt, tones[pat[(s / 2) % pat.length] % tones.length], sp * 2.4, 0.9 * v);
-    if (s === 0 || s === 8) INS.bass(tt, ch.root - 12 + (s === 8 ? 7 : 0), sp * 3.5, 0.8 * v);
-    if (bar % 4 >= 2 && (s === 3 || s === 6 || s === 10 || s === 14) && r() < 0.6) { var sc2 = scale(), m2 = trk.root + 24 + sc2[Math.floor(r() * 5)]; INS.pluck(tt, m2, sp * 1.6, 0.7 * v); }
-  } else {
-    if (s % 4 === 0 || (s % 4 === 3)) INS.noise(tt, (s % 4 === 0 ? 0.06 : 0.035) * v, 0, 8200, s % 8 === 0 ? 0.5 : 0.25, 0.3);
-    if (s === 4 || s === 12) INS.noise(tt, 0.05 * v, 0, 2600, 0.12, 0.4);
-    if (s === 0 && r() < 0.6) INS.kick(tt, 0.35 * v);
-    if (beat) { var sc3 = scale(), q = s / 4, walk = [0, ch.iv[1], ch.iv[2], (ch.iv[2] + 2) % 12]; INS.bass(tt, ch.root - 12 + walk[q], sp * 3.6, 0.95 * v); }
-    if ((s === 2 || s === 7 || s === 11) && r() < 0.6) ch.iv.slice(1).concat([ch.iv[0] + 12]).forEach(function (iv) { INS.epiano(tt, ch.root + 12 + iv, sp * 1.4, 0.55 * v); });
-    if (bar % 4 >= 1 && s % 2 === 0 && r() < 0.28) { var sc4 = scale(); INS.epiano(tt, trk.root + 24 + sc4[Math.floor(r() * sc4.length)], sp * 1.6, 0.6 * v); }
-  }
-}
-function tick() {
-  if (!C || !RD.on) return;
-  var S = trk.S, sp = 60 / S.bpm / 4, ahead = C.currentTime + 0.14;
-  while (nextT < ahead) {
-    if (trk.gap > 0) { trk.gap--; nextT += sp; if (trk.gap === 0) newTrack(); continue; }
-    schedule(nextT, sp, sp);
-    nextT += sp; step++;
-    if (step % 16 === 0) { trk.bar++; if (trk.bar >= trk.bars) { trk.gap = 16 * 2; RD.info = GD.quote(); RD.between = true; emit(); setTimeout(function () { RD.between = false; emit(); }, 6000); } }
-  }
-}
-function startCrackle() {
-  if (crackle) { try { crackle.stop(); } catch (e) {} crackle = null; }
-  if (STATIONS[RD.st].id !== 'lounge') return;
-  var b = C.createBuffer(1, C.sampleRate * 2, C.sampleRate), d = b.getChannelData(0);
-  for (var i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * 0.012 + (Math.random() < 0.0006 ? (Math.random() * 2 - 1) * 0.5 : 0);
-  var s = C.createBufferSource(), f = C.createBiquadFilter(), g = C.createGain(); s.buffer = b; s.loop = true; f.type = 'bandpass'; f.frequency.value = 3000; g.gain.value = 0.25; s.connect(f); f.connect(g); g.connect(OUT); s.start(); crackle = s;
-}
-var AU = null, fmTry = 0;
-function fmStop() { if (AU) { try { AU.pause(); AU.removeAttribute('src'); AU.load(); } catch (e) {} } }
-function fmPlay() {
-  var stn = FM[RD.st], u = stn.urls[fmTry];
-  if (!u) { RD.fmState = 'error'; emit(); return; }
-  if (!AU) {
-    AU = new Audio(); AU.preload = 'none';
-    AU.addEventListener('playing', function () { if (RD.mode === 'fm') { RD.fmState = 'live'; emit(); } });
-    AU.addEventListener('waiting', function () { if (RD.mode === 'fm' && RD.on) { RD.fmState = 'buffer'; emit(); } });
-    AU.addEventListener('error', function () { if (RD.mode !== 'fm' || !RD.on || !AU.getAttribute('src')) return; fmTry++; fmPlay(); });
-  }
-  RD.fmState = 'buffer'; emit();
-  AU.src = u; AU.volume = RD.vol;
-  var pr = AU.play(); if (pr && pr.catch) pr.catch(function (e) { if (e && e.name === 'NotAllowedError') { RD.fmState = 'tap'; emit(); } });
-}
-RD.setVol = function (v) { RD.vol = Math.max(0, Math.min(1, v)); if (OUT && RD.on && RD.mode === 'local') OUT.gain.setTargetAtTime(RD.vol * 0.9, C.currentTime, 0.1); if (AU) AU.volume = RD.vol; emit(); };
-function localStop() {
-  if (C) { OUT.gain.cancelScheduledValues(C.currentTime); OUT.gain.setTargetAtTime(0.0001, C.currentTime, 0.12); }
-  if (crackle) { try { crackle.stop(C.currentTime + 0.5); } catch (e) {} crackle = null; }
-  if (timer) { clearInterval(timer); timer = null; }
-}
-RD.play = function (st) {
-  var L = RD.list();
-  if (st !== undefined) RD.st = (st + L.length) % L.length;
-  if (RD.st >= L.length) RD.st = 0;
-  if (RD.mode === 'fm') {
-    localStop(); RD.on = true; fmTry = 0; RD.title = ''; RD.artist = ''; fmPlay(); return;
-  }
-  fmStop();
-  if (!ctx()) return;
-  RD.on = true; newTrack(); step = 0; nextT = C.currentTime + 0.12;
-  OUT.gain.cancelScheduledValues(C.currentTime); OUT.gain.setValueAtTime(0.0001, C.currentTime); OUT.gain.linearRampToValueAtTime(RD.vol * 0.9, C.currentTime + 0.8);
-  DLY.delayTime.value = 60 / STATIONS[RD.st].bpm * 0.75;
-  startCrackle();
-  if (!timer) timer = setInterval(tick, 30);
-  emit();
-};
-RD.stop = function () { RD.on = false; localStop(); fmStop(); RD.fmState = ''; emit(); };
+RD.stop = function () { RD.on = false; RD.state = ''; GLR.req++; if (AU) { try { AU.pause(); AU.removeAttribute('src'); AU.load(); } catch (e) {} } emit(); };
 RD.toggle = function () { if (RD.on) RD.stop(); else RD.play(); };
-RD.next = function (d) { var L = RD.list(); RD.st = (RD.st + (d || 1) + L.length) % L.length; if (RD.on) RD.play(); else emit(); };
-RD.setMode = function (m) { if (m === RD.mode) return; var was = RD.on; if (was) { localStop(); fmStop(); } RD.on = false; RD.mode = m; RD.st = 0; RD.fmState = ''; if (was) RD.play(); else emit(); };
-RD.station = function () { var L = RD.list(); return L[RD.st] || L[0]; };
-RD.suspend = function (yes) {
-  if (RD.mode === 'fm') { if (!AU || !RD.on) return; if (yes) AU.pause(); else { var pr = AU.play(); if (pr && pr.catch) pr.catch(function () {}); } return; }
-  if (!C) return; if (yes) C.suspend(); else if (RD.on) { C.resume(); nextT = Math.max(nextT, C.currentTime + 0.05); }
-};
+RD.next = function () { if (!RD.on) { RD.play(); return; } if (GLR.pl) glrNext(); };
+RD.setVol = function (v) { RD.vol = Math.max(0, Math.min(1, v)); if (AU) AU.volume = RD.vol; emit(); };
+RD.suspend = function (yes) { if (!AU || !RD.on) return; if (yes) AU.pause(); else { var pr = AU.play(); if (pr && pr.catch) pr.catch(function () {}); } };
 
 // ---------- 3D showroom (home screen) ----------
 GD.Showroom = function (cv) {
@@ -8021,8 +7892,8 @@ GD.Showroom.prototype.draw = function () {
 'use strict';
 var U = GD.U;
 // ---------- settings and progress ----------
-var S = GD.S = { lang: 'de', hints: true, sound: true, stars: {}, rulesIntro: true, mirror: true, cockpit: false, gfx3d: true, carColor: '#1565c0', carModel: 'hatch', radioSt: 0, radioVol: 0.55, radioOn: false, radioMode: 'local', tourDone: false, hudSigns: true };
-var SK = ['lang', 'hints', 'sound', 'rulesIntro', 'mirror', 'cockpit', 'gfx3d', 'carColor', 'carModel', 'radioSt', 'radioVol', 'radioOn', 'radioMode', 'tourDone', 'hudSigns'];
+var S = GD.S = { lang: 'de', hints: true, sound: true, stars: {}, rulesIntro: true, mirror: true, cockpit: false, gfx3d: true, carColor: '#1565c0', carModel: 'hatch', radioVol: 0.55, radioOn: false, tourDone: false, hudSigns: true };
+var SK = ['lang', 'hints', 'sound', 'rulesIntro', 'mirror', 'cockpit', 'gfx3d', 'carColor', 'carModel', 'radioVol', 'radioOn', 'tourDone', 'hudSigns'];
 var KEY = 'germadrive.v1';
 S.hist = {};
 // progress (stars and the last report of every mission) and all choices are kept on this device
@@ -8080,7 +7951,7 @@ var TX = {
   showTour: ['Steuerung erklären', 'Explain the controls'], leaveQ: ['Mission verlassen?', 'Leave the mission?'], leaveT: ['Dein Fortschritt in dieser Fahrt geht verloren.', 'Your progress in this drive will be lost.'], leave: ['Verlassen', 'Leave'], keepDriving: ['Weiterfahren', 'Keep driving'],
   carModel: ['Automodell', 'Car model'], helmet: ['Helm aufsetzen', 'Put on helmet'], mirL: ['Spiegel links', 'Left mirror'], mirR: ['Spiegel rechts', 'Right mirror'],
   radio: ['Radio', 'Radio'], volume: ['Lautstärke', 'Volume'], carColor: ['Autofarbe', 'Car colour'], tapCar: ['Tippe aufs Auto für eine neue Farbe, ziehe zum Drehen', 'Tap the car for a new colour, drag to turn it'],
-  exitQ: ['GermaDrive schließen?', 'Close GermaDrive?'], exit: ['Schließen', 'Close'], tipRoad: ['Verkehrstipp', 'Road tip'], radioNote: ['Die Musik entsteht live in der App, ganz ohne Internet.', 'The music is created live in the app, no internet needed.'],
+  exitQ: ['GermaDrive schließen?', 'Close GermaDrive?'], exit: ['Schließen', 'Close'], 
   done: ['geschafft', 'done'], tour: ['Tour', 'Tour'], skipTour: ['Tour überspringen', 'Skip tour'], finishTour: ['Los geht’s', 'Let’s go'], station: ['Sender', 'Station']
 };
 function T(k) { return TX[k] ? LA(TX[k]) : k; }
@@ -8526,9 +8397,8 @@ function scrSettings() {
     el('div', { class: 'set col' }, [el('span', { text: T('carColor') }), el('div', { class: 'swatches' }, COLORS.map(function (c) { return el('button', { class: 'sw' + (S.carColor === c ? ' on' : ''), style: 'background:' + c, 'aria-label': c, onclick: function () { S.carColor = c; GD.saveState(); rerender(); } }); }))]),
     el('div', { class: 'set col' }, [el('span', { text: T('radio') }), el('div', { class: 'seg wrap' }, [
       el('button', { class: !GD.Radio.on ? 'on' : '', onclick: function () { GD.Radio.stop(); S.radioOn = false; GD.saveState(); rerender(); } }, [T('off')]),
-      el('button', { class: GD.Radio.on && GD.Radio.mode === 'local' ? 'on' : '', onclick: function () { GD.Radio.setMode('local'); GD.Radio.play(0); S.radioOn = true; S.radioMode = 'local'; S.radioSt = 0; GD.saveState(); rerender(); } }, [tr('Lokale Musik', 'Local music')]),
-      el('button', { class: GD.Radio.on && GD.Radio.mode === 'fm' ? 'on' : '', onclick: function () { GD.Radio.setMode('fm'); GD.Radio.play(0); S.radioOn = true; S.radioMode = 'fm'; S.radioSt = 0; GD.saveState(); rerender(); } }, ['FM'])
-    ]), el('small', { class: 'small', text: tr('Lokale Musik läuft ohne Internet. FM spielt echte Sender und braucht Internet. Sender wählst du über das Radio-Symbol.', 'Local music plays without internet. FM plays real stations and needs internet. Pick stations with the radio button.') })]),
+      el('button', { class: GD.Radio.on ? 'on' : '', onclick: function () { if (!GD.Radio.on) GD.Radio.play(); S.radioOn = true; GD.saveState(); rerender(); } }, ['Germalingo Radio'])
+    ]), el('small', { class: 'small', text: tr('Germalingo Radio spielt eigene Musik von radio.germalingo.com und braucht Internet.', 'Germalingo Radio plays our own music from radio.germalingo.com and needs internet.') })]),
     el('button', { class: 'big', onclick: function () { S.tourDone = false; GD.saveState(); toastPage(T('tourSet')); } }, [el('span', { text: T('tourAgain') })]),
     el('p', { class: 'small', text: tr('Tastatur: Pfeiltasten oder WASD fahren und lenken, Q und E blinken, H Warnblinker, V Schulterblick, L Licht, F Nebelschlussleuchte, R Rückwärtsgang, P Parken, C Kamera, Esc Pause.', 'Keyboard: arrow keys or WASD to drive and steer, Q and E indicators, H hazard lights, V shoulder check, L lights, F rear fog light, R reverse, P park, C camera, Esc pause.') }),
     progressBox(),
@@ -9178,41 +9048,30 @@ function leaveMenu() {
 function radioPanel(anchor) {
   var old = document.querySelector('.rpanel'); if (old) { old.remove(); return; }
   var R = GD.Radio, fq = el('small', { class: 'rfq' }), st = el('b', { class: 'rst' }), now = el('div', { class: 'rnow' }), pp = el('button', { class: 'rbtn big2', 'aria-label': 'Play' });
-  var chips = el('div', { class: 'rchips' }), tabs = el('div', { class: 'rtabs' }), note = el('small', { class: 'rnote' }), idleT = 0;
+  var note = el('small', { class: 'rnote' }), idleT = 0;
   var vol = el('input', { type: 'range', min: '0', max: '100', value: String(Math.round(R.vol * 100)), class: 'rvol', 'aria-label': T('volume') });
-  function save() { S.radioOn = R.on; S.radioSt = R.st; S.radioMode = R.mode; S.radioVol = R.vol; GD.saveState(); }
+  function save() { S.radioOn = R.on; S.radioVol = R.vol; GD.saveState(); }
   vol.addEventListener('input', function () { R.setVol(vol.value / 100); save(); });
-  pp.addEventListener('click', function () { if (R.on) R.stop(); else R.play(R.st); save(); });
-  var pv = el('button', { class: 'rbtn', 'aria-label': 'Prev', html: ICON.prev, onclick: function () { R.next(-1); save(); } });
-  var nx = el('button', { class: 'rbtn', 'aria-label': 'Next', html: ICON.next, onclick: function () { R.next(1); save(); } });
-  [['local', tr('Lokal', 'Local')], ['fm', 'FM']].forEach(function (q) { tabs.appendChild(el('button', { 'data-m': q[0], onclick: function () { R.setMode(q[0]); save(); fill(); } }, [q[1]])); });
+  pp.addEventListener('click', function () { R.toggle(); save(); });
+  var nx = el('button', { class: 'rbtn', 'aria-label': 'Next', html: ICON.next, onclick: function () { R.next(); save(); } });
   var p = el('div', { class: 'rpanel glass' }, [
-    el('div', { class: 'rph' }, [icon('radio'), el('span', { text: T('radio') }), tabs, el('button', { class: 'rx', 'aria-label': 'close', html: ICON.close, onclick: function () { p.remove(); } })]),
+    el('div', { class: 'rph' }, [icon('radio'), el('span', { text: T('radio') }), el('button', { class: 'rx', 'aria-label': 'close', html: ICON.close, onclick: function () { p.remove(); } })]),
     el('div', { class: 'rdisp' }, [fq, st, now]),
-    chips,
-    el('div', { class: 'rctl' }, [pv, pp, nx]),
+    el('div', { class: 'rctl' }, [pp, nx]),
     el('div', { class: 'rvr' }, [el('small', { text: T('volume') }), vol]),
     note
   ]);
-  function fill() {
-    clear(chips);
-    R.list().forEach(function (x, k) { chips.appendChild(el('button', { class: 'rch', 'data-k': k, onclick: function () { R.play(k); save(); } }, [x.name])); });
-    upd();
-  }
+  function fill() { upd(); }
   function upd() {
     if (!p.isConnected) return;
     var S2 = R.station();
-    fq.textContent = R.mode === 'fm' ? 'FM · ' + LA(S2.genre) : S2.freq + ' MHz · ' + LA(S2.genre);
+    fq.textContent = S2.site + ' · ' + LA(S2.genre);
     st.textContent = S2.name;
-    var line;
-    if (!R.on) line = T('off');
-    else if (R.mode === 'fm') line = R.fmState === 'live' ? '● Live' : R.fmState === 'error' ? tr('Sender nicht erreichbar. Internet an?', 'Station not reachable. Internet on?') : R.fmState === 'tap' ? tr('Tippe auf Play', 'Tap play') : tr('Verbinde …', 'Connecting …');
-    else line = R.between && R.info ? T('tipRoad') + ': ' + LA(R.info) : '♪ ' + R.title + ' · ' + R.artist;
-    now.textContent = line;
+    now.textContent = !R.on ? T('off') : R.state === 'live' ? '♪ ' + R.title + (R.artist ? ' · ' + R.artist : '') : R.state === 'error' ? tr('Radio nicht erreichbar. Internet an?', 'Radio not reachable. Internet on?') : R.state === 'tap' ? tr('Tippe auf Play', 'Tap play') : tr('Verbinde …', 'Connecting …');
     pp.innerHTML = R.on ? ICON.stop : ICON.play; p.classList.toggle('on', R.on);
-    note.textContent = R.mode === 'fm' ? tr('Echte Sender live über das Internet.', 'Real stations, live over the internet.') : T('radioNote');
-    tabs.querySelectorAll('button').forEach(function (t) { t.classList.toggle('on', t.getAttribute('data-m') === R.mode); });
-    chips.querySelectorAll('.rch').forEach(function (c) { var on = +c.getAttribute('data-k') === R.st; c.classList.toggle('on', on); if (on && c.scrollIntoView && p._shown !== R.mode + R.st) { p._shown = R.mode + R.st; chips.scrollLeft = c.offsetLeft - chips.clientWidth / 2 + c.clientWidth / 2; } });
+    clear(note);
+    note.appendChild(document.createTextNode(tr('Eigene Musik von Germalingo, über das Internet. Auch auf ', 'Our own music from Germalingo, over the internet. Also on ')));
+    note.appendChild(el('a', { href: 'https://radio.germalingo.com', target: '_blank', rel: 'noopener', text: 'radio.germalingo.com' }));
   }
   var un = R.listen(function () { if (!p.isConnected) { un(); return; } upd(); });
   document.body.appendChild(p);
@@ -9244,7 +9103,7 @@ var TOUR = [
   { e: function () { return [H.mirror, H.nav]; }, t: ['Rückspiegel und Navigation', 'Mirror and navigation'], d: ['Der Spiegel zeigt den Verkehr hinter dir. Darunter steht, wohin es geht und wie weit es noch ist.', 'The mirror shows the traffic behind you. Below it you see where to go and how far it is.'] },
   { e: function () { return [H.mini]; }, t: ['Karte', 'Map'], d: ['Deine Strecke von oben. Der Pfeil bist du.', 'Your route from above. The arrow is you.'] },
   { e: function () { return [H.toasts]; }, prep: function () { toast(tr('Beispiel: So sieht ein Tipp aus.', 'Example: this is how a tip looks.'), 'hint'); }, t: ['Hinweise und Fehler', 'Tips and mistakes'], d: ['Gelb ist ein Tipp, Blau ein Hinweis ohne Wertung, Rot ein Fehler. Jeder Fehler kostet einen Stern.', 'Yellow is a tip, blue a reminder that is not scored, red a mistake. Each mistake costs a star.'] },
-  { e: function () { return [H.radioB]; }, t: ['Radio', 'Radio'], d: ['Musik ohne Internet. Tippe hier für Sender und Lautstärke.', 'Music without internet. Tap here for stations and volume.'] },
+  { e: function () { return [H.radioB]; }, t: ['Radio', 'Radio'], d: ['Germalingo Radio mit eigener Musik. Tippe hier für Play, nächsten Titel und Lautstärke.', 'Germalingo Radio with our own music. Tap here for play, next track and volume.'] },
   { e: function () { return [H.pauseB, H.backB]; }, t: ['Pause und Zurück', 'Pause and back'], d: ['Pause hält das Spiel an und zeigt die Regeln der Mission. Zurück verlässt die Mission.', 'Pause stops the game and shows the mission rules. Back leaves the mission.'] },
   { t: ['Gute Fahrt!', 'Have a good drive!'], d: ['Halte dich an die Regeln. Ohne Fehler gibt es drei Sterne.', 'Follow the rules. No mistakes earns three stars.'] }
 ];
@@ -9365,8 +9224,8 @@ GD.boot = function () {
   show(scrHome);
   window.addEventListener('popstate', function () {});
   document.addEventListener('visibilitychange', function () { if (document.hidden && G.W && !G.W.done && !G.modal) pauseMenu(); GD.Radio.suspend(document.hidden); });
-  GD.Radio.vol = S.radioVol; GD.Radio.mode = S.radioMode === 'fm' ? 'fm' : 'local'; GD.Radio.st = S.radioSt || 0;
-  if (S.radioOn) { var first = function () { document.removeEventListener('pointerdown', first, true); if (S.radioOn && !GD.Radio.on) GD.Radio.play(S.radioSt || 0); }; document.addEventListener('pointerdown', first, true); }
+  GD.Radio.vol = S.radioVol;
+  if (S.radioOn) { var first = function () { document.removeEventListener('pointerdown', first, true); if (S.radioOn && !GD.Radio.on) GD.Radio.play(); }; document.addEventListener('pointerdown', first, true); }
 };
 // Android app shell hooks
 GD.onAppPause = function () { try { if (G.W && !G.W.done && !G.modal) pauseMenu(); if (G.showroom) G.showroom.stop(); GD.Radio.suspend(true); } catch (e) {} };
